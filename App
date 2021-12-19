@@ -1,0 +1,166 @@
+package com.labor3;
+
+import java.sql.*;
+import java.sql.SQLException;
+import java.util.Scanner;
+import java.security.SecureRandom;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.nio.charset.StandardCharsets;
+import java.math.BigInteger;
+import java.util.regex.*;
+
+public final class Application {
+    private Connection dbConnection;
+    static final String JDBC_DRIVER = "org.mariadb.jdbc.Driver";
+    static final String DB_URL = "jdbc:mariadb://localhost:3306";
+
+    //  Database credentials
+    static final String USER = "app_user";
+    static final String PASSWORD = "password";
+
+    public static String hashWithSha256(String input) throws NoSuchAlgorithmException  {
+        MessageDigest md = MessageDigest.getInstance("SHA-512");
+        md.update(input.getBytes(StandardCharsets.UTF_8));
+        byte[] digest = md.digest();
+        String hex = String.format("%064x", new BigInteger(1, digest));
+        return hex;
+    }
+
+    public void connectDB(String user, String password) throws ClassNotFoundException, SQLException {
+        Class.forName(JDBC_DRIVER);
+        this.dbConnection =  DriverManager.getConnection(DB_URL, user, password);
+    }
+    
+    public void closeConnection() {
+        try {
+            this.dbConnection.close();
+        } catch(NullPointerException | SQLException ex) {
+        }
+    }
+
+
+    public boolean createUser(String user, String password) {
+        SecureRandom random;
+        String insert;
+        String salt;
+ 
+        random = new SecureRandom();
+        salt =  new BigInteger(130, random).toString(16);
+ 
+        insert = "INSERT INTO users "
+            + "(username, pass_salt, pass_hashed) "
+            + "VALUES (?, ?, ?)";
+ 
+        try (PreparedStatement pstmt = this.dbConnection.prepareStatement(insert)) {
+            pstmt.setString(1, user);
+            pstmt.setString(2, salt);
+            pstmt.setString(3, hashWithSha256(salt + password));
+            pstmt.executeUpdate();
+ 
+            return true;
+        } catch(NoSuchAlgorithmException | SQLException ex) {
+            return false;
+        }
+    }
+
+    public boolean authenticateUser(String user, String password) {
+        String pass_hashed;
+        String pass_salt;
+        String select;
+        ResultSet res;
+ 
+        select = "SELECT pass_salt, pass_hashed FROM users WHERE username = ?";
+        res = null;
+ 
+        try(PreparedStatement pstmt = this.dbConnection.prepareStatement(select)) {
+            pstmt.setString(1, user);
+            res = pstmt.executeQuery();
+ 
+            res.next(); // We assume that username is unique
+ 
+            pass_salt = res.getString(1);
+            pass_hashed = res.getString(2);
+ 
+            if (pass_hashed.equals(hashWithSha256(pass_salt + password))) {
+                return true;
+            } else {
+                return false;
+            }
+        } catch(NoSuchAlgorithmException | SQLException ex) {
+            return false;
+        } finally {
+            try {
+                if (res instanceof ResultSet && !res.isClosed()) {
+                    res.close();
+                }
+            } catch(SQLException ex) {
+            }
+        }
+    }
+
+    public static boolean checkUsername(String input) {
+        String regex = "^[a-zA-Z0-9]$";
+        Pattern p = Pattern.compile(regex);
+        Matcher m = p.matcher(input);
+        return m.matches();
+    }
+
+    public void runMenu() {
+        Scanner sc = new Scanner(System.in); 
+        while (true) {
+            System.out.print("1) Register/Update\n2) Login\n3)Exit\nYour choice: "); 
+            String str = sc.nextLine();
+            if (str.equals("1")) {
+                String username;
+                String password;
+                System.out.print("New Username: ");
+                username = sc.nextLine();
+                if (!checkUsername(username)) {
+                    System.out.print("Invalid Username-Syntax.");
+                    continue;
+                }
+                System.out.print("New Password: ");
+                password = sc.nextLine();
+                if (this.createUser(username, password)) {
+                    System.out.print("Successfully created/updated user.");
+                } else {
+                    System.out.print("User already exists.");
+                }
+            } else if (str.equals("2")) {
+                String username;
+                String password;
+                System.out.print("Username: ");
+                username = sc.nextLine();
+                if (!checkUsername(username)) {
+                    System.out.print("Invalid Username-Syntax.");
+                    continue;
+                }
+                System.out.print("New Password: ");
+                password = sc.nextLine();
+                if (this.authenticateUser(username, password)) {
+                    System.out.print("Successfully authenticated user.");
+                } else {
+                    System.out.print("Invalid username or password.");
+                }
+            } else if (str.equals("3")) {
+                break;
+            } else {
+                System.out.println("Wrong input, try again.");
+            }
+        }
+        sc.close();
+    }
+
+    public static void main(String[] args) {
+        App app = new App();
+        try {
+            app.connectDB(USER, PASS);
+            app.runMenu();
+        } catch(ClassNotFoundException | SQLException ex) {
+            ex.printStackTrace();
+        } finally {
+            app.closeConnection();
+        }
+    }//end main
+}
